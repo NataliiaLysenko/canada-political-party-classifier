@@ -24,16 +24,16 @@ def robbins_monro_svm(
         X_train, y_train_svm, X_test, y_test_svm,
         kernel_name="linear", kernel_params=None,
         lambda_reg=0.01, n_epochs=50, eta0=0.1, decay=0.01,
-        patience=None, random_state=42,
+        random_state=42,
 ):
     """
-    Robbins-Monro SGD for soft-margin SVM via the representer
-    theorem.
+    Stochastic subgradient descent for soft-margin SVM via the representer
+    theorem, using a Robbins-Monro learning rate schedule.
 
     Maintains alpha in R^n so that w = sum_i alpha_i * phi(x_i).
     Decision function: f(x) = K(X_train, x)^T @ alpha - b.
 
-    Primal loss minimised (per Pegasos / Shalev-Shwartz et al. 2007):
+    Primal loss minimised:
         L = (1/n) sum_j max(0, 1 - y_j * f(x_j)) + lambda * ||w||^2
 
     Per-step updates (sample j, learning rate eta_t = eta0 / (1 + decay * t)):
@@ -45,8 +45,6 @@ def robbins_monro_svm(
     ----------
     y_train_svm, y_test_svm : array-like, labels in {-1, +1}
     kernel_params : dict, passed to compute_kernel_matrix (e.g. {"gamma": 0.1})
-    patience      : int or None.  If set, stop early when test accuracy has not
-                    improved for this many consecutive epochs.
 
     Returns
     -------
@@ -68,9 +66,6 @@ def robbins_monro_svm(
     rng = np.random.default_rng(random_state)
 
     train_hist, test_hist = [], []
-    best_test_acc = -1.0
-    best_alpha, best_b = alpha.copy(), b
-    wait = 0
     t0 = time.perf_counter()
 
     for epoch in range(n_epochs):
@@ -82,24 +77,8 @@ def robbins_monro_svm(
                 alpha[j] += eta * y_tr[j]
                 b -= eta * y_tr[j]
 
-        tr_acc = accuracy_score(y_tr > 0, (K_tr @ alpha - b) > 0)
-        te_acc = accuracy_score(y_te > 0, (K_te.T @ alpha - b) > 0)
-        train_hist.append(tr_acc)
-        test_hist.append(te_acc)
-
-        # ---- early stopping ----
-        if te_acc > best_test_acc:
-            best_test_acc = te_acc
-            best_alpha, best_b = alpha.copy(), b
-            wait = 0
-        else:
-            wait += 1
-        if patience is not None and wait >= patience:
-            break
-
-    # restore best checkpoint when using early stopping
-    if patience is not None:
-        alpha, b = best_alpha, best_b
+        train_hist.append(accuracy_score(y_tr > 0, (K_tr @ alpha - b) > 0))
+        test_hist.append(accuracy_score(y_te > 0, (K_te.T @ alpha - b) > 0))
 
     return {
         "alpha": alpha,
@@ -111,7 +90,6 @@ def robbins_monro_svm(
         "test_acc_history": test_hist,
         "fit_time_s": time.perf_counter() - t0,
     }
-
 
 def predict_rm(result, X_new):
     """Return binary (0/1) predictions for X_new from a fitted robbins_monro_svm result."""
