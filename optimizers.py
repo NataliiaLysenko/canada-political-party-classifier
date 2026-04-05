@@ -17,6 +17,86 @@ from kernels import compute_kernel_matrix, KERNEL_REGISTRY
 
 
 # ---------------------------------------------------------------------------
+# Adam SVM — dual representation with Adaptive Moment Estimation
+# ---------------------------------------------------------------------------
+
+def adam_svm(
+    X_train, y_train_svm, X_test, y_test_svm,
+    kernel_name="linear", kernel_params=None,
+    lambda_reg=0.01, n_epochs=50, 
+    learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8,
+    random_state=42,
+):
+    """
+    SVM optimization using the Adam algorithm. 
+    Maintains moving averages of the gradient (m) and its square (v).
+    """
+    kp = kernel_params or {}
+    X_tr = np.asarray(X_train, dtype=float)
+    X_te = np.asarray(X_test, dtype=float)
+    y_tr = np.asarray(y_train_svm, dtype=float)
+    y_te = np.asarray(y_test_svm, dtype=float)
+
+    K_tr = compute_kernel_matrix(X_tr, X_tr, kernel_name, **kp)
+    K_te = compute_kernel_matrix(X_tr, X_te, kernel_name, **kp)
+
+    n = len(y_tr)
+    alpha = np.zeros(n)
+    b = 0.0
+    
+    # adam initializations
+    m_alpha, v_alpha = np.zeros(n), np.zeros(n)
+    m_b, v_b = 0.0, 0.0
+    t = 0 # timestep for bias correction
+    
+    rng = np.random.default_rng(random_state)
+    train_hist, test_hist = [], []
+    t0 = time.perf_counter()
+
+    for epoch in range(n_epochs):
+        for j in rng.permutation(n):
+            t += 1
+            
+            # calculate gradient 
+            margin = y_tr[j] * (K_tr[j] @ alpha - b)
+            
+            # gradient for alpha
+            grad_alpha = 2 * lambda_reg * alpha
+            grad_b = 0.0
+            
+            if margin < 1.0:
+                grad_alpha[j] -= y_tr[j]
+                grad_b += y_tr[j]
+
+            # update Moments (m and v)
+            m_alpha = beta1 * m_alpha + (1 - beta1) * grad_alpha
+            v_alpha = beta2 * v_alpha + (1 - beta2) * (grad_alpha**2)
+            
+            m_b = beta1 * m_b + (1 - beta1) * grad_b
+            v_b = beta2 * v_b + (1 - beta2) * (grad_b**2)
+
+            # bias correction
+            m_hat_alpha = m_alpha / (1 - beta1**t)
+            v_hat_alpha = v_alpha / (1 - beta2**t)
+            
+            m_hat_b = m_b / (1 - beta1**t)
+            v_hat_b = v_b / (1 - beta2**t)
+
+            # update parameters
+            alpha -= learning_rate * m_hat_alpha / (np.sqrt(v_hat_alpha) + epsilon)
+            b -= learning_rate * m_hat_b / (np.sqrt(v_hat_b) + epsilon)
+
+        train_hist.append(accuracy_score(y_tr > 0, (K_tr @ alpha - b) > 0))
+        test_hist.append(accuracy_score(y_te > 0, (K_te.T @ alpha - b) > 0))
+
+    return {
+        "alpha": alpha, "b": b, "X_train": X_tr,
+        "kernel_name": kernel_name, "kernel_params": kp,
+        "train_acc_history": train_hist, "test_acc_history": test_hist,
+        "fit_time_s": time.perf_counter() - t0,
+    }
+
+# ---------------------------------------------------------------------------
 # Robbins-Monro SVM  —  dual representation, any registered kernel
 # ---------------------------------------------------------------------------
 
