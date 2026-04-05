@@ -285,6 +285,359 @@ def fit_best_rm(X_train, y_train_svm, X_test, y_test_svm, best_result,
         **rm_params,
     )
 
+# ---------------------------------------------------------------------------
+# AdaGrad SVM  —  dual representation, any registered kernel
+# ---------------------------------------------------------------------------
+
+def adagrad_svm(
+        X_train, y_train_svm, X_test, y_test_svm,
+        kernel_name="linear", kernel_params=None,
+        lambda_reg=0.01, n_epochs=50, eta0=0.1, eps=1e-8,
+        patience=None, random_state=42,
+):
+    """
+    AdaGrad for soft-margin SVM via the representer theorem.
+
+    This mirrors robbins_monro_svm, but replaces the decayed global step-size
+    with coordinate-wise adaptive learning rates:
+        G_t = sum_{s<=t} g_s^2
+        theta_{t+1} = theta_t - eta0 / sqrt(G_t + eps) * g_t
+
+    Maintains alpha in R^n so that:
+        f(x) = K(X_train, x)^T @ alpha - b
+
+    Objective (same style as RM section):
+        L = (1/n) sum_j max(0, 1 - y_j * f(x_j)) + lambda * ||w||^2
+
+    Parameters
+    ----------
+    y_train_svm, y_test_svm : labels in {-1, +1}
+    kernel_params : dict passed to compute_kernel_matrix
+    eps : small constant for numerical stability in AdaGrad
+    patience : optional early stopping based on test accuracy
+
+    Returns
+    -------
+    dict with keys:
+        alpha, b, X_train, kernel_name, kernel_params,
+        train_acc_history, test_acc_history, fit_time_s
+    """
+    kp = kernel_params or {}
+    X_tr = np.asarray(X_train, dtype=float)
+    X_te = np.asarray(X_test, dtype=float)
+    y_tr = np.asarray(y_train_svm, dtype=float)
+    y_te = np.asarray(y_test_svm, dtype=float)
+
+    K_tr = compute_kernel_matrix(X_tr, X_tr, kernel_name, **kp)
+    K_te = compute_kernel_matrix(X_tr, X_te, kernel_name, **kp)
+
+    n = len(y_tr)
+    alpha = np.zeros(n)
+    b = 0.0
+
+    # AdaGrad accumulators
+    G_alpha = np.zeros(n)
+    G_b = 0.0
+
+    rng = np.random.default_rng(random_state)
+
+    train_hist, test_hist = [], []
+    best_test_acc = -1.0
+    best_alpha, best_b = alpha.copy(), b
+    wait = 0
+    t0 = time.perf_counter()
+
+    for epoch in range(n_epochs):
+        for j in rng.permutation(n):
+            margin = y_tr[j] * (K_tr[j] @ alpha - b)
+
+            # full subgradient wrt alpha from regularization
+            grad_alpha = 2.0 * lambda_reg * alpha
+            grad_b = 0.0
+
+            # hinge-loss contribution if margin violated
+            if margin < 1.0:
+                grad_alpha[j] -= y_tr[j]
+                grad_b = y_tr[j]
+
+            # AdaGrad accumulator update
+            G_alpha += grad_alpha ** 2
+            G_b += grad_b ** 2
+
+            # coordinate-wise adaptive learning rate
+            alpha -= (eta0 / np.sqrt(G_alpha + eps)) * grad_alpha
+
+            # scalar adaptive rate for b
+            if grad_b != 0.0:
+                b -= (eta0 / np.sqrt(G_b + eps)) * grad_b
+
+        tr_acc = accuracy_score(y_tr > 0, (K_tr @ alpha - b) > 0)
+        te_acc = accuracy_score(y_te > 0, (K_te.T @ alpha - b) > 0)
+        train_hist.append(tr_acc)
+        test_hist.append(te_acc)
+
+        # early stopping on test accuracy, same spirit as RM section
+        if te_acc > best_test_acc:
+            best_test_acc = te_acc
+            best_alpha, best_b = alpha.copy(), b
+            wait = 0
+        else:
+            wait += 1
+
+        if patience is not None and wait >= patience:
+            break
+
+    if patience is not None:
+        alpha, b = best_alpha, best_b
+
+    return {
+        "alpha": alpha,
+        "b": b,
+        "X_train": X_tr,
+        "kernel_name": kernel_name,
+        "kernel_params": kp,
+        "train_acc_history": train_hist,
+        "test_acc_history": test_hist,
+        "fit_time_s": time.perf_counter() - t0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cross-validation tuning for AdaGrad
+# ---------------------------------------------------------------------------
+
+_DEFAULT_ADAGRAD_GRID = [
+    {"lambda_reg": lr, "eta0": e, "eps": eps, "n_epochs": ne}
+    for lr in [0.001, 0.01, 0.1]
+    for e in [0.01, 0.05, 0.1]
+    for eps in [1e-8, 1e-6]
+    for ne in [50, 100]
+]
+
+
+def tune_adagrad_cv(
+        X_train, y_train,
+        kernel_name="linear", kernel_params=None,
+        param_grid=None, cv=CV_FOLDS, random_state=42,
+):
+    """
+    k-fold CV grid search over AdaGrad hyperparameters for a FIXED kernel setting.
+
+    y_train      : 0/1 labels (converted to {-1,+1} per fold internally)
+    kernel_params: fixed kernel params for this CV run
+
+    Returns dict:
+        results_df, best_params, best_cv_score, fit_time_s
+    """
+    kp = kernel_params or {}
+    param_grid = param_grid or _DEFAULT_ADAGRAD_GRID
+    X = np.asarray(X_train, dtype=float)
+    y = np.asarray(y_train)
+
+    rows = []
+    t0 = time.perf_counter()
+
+    for params in param_grid:
+        fold_scores = []
+
+        for tr_idx, val_idx in cv.split(X, y):
+            y_tr_svm = np.where(y[tr_idx] == 1, 1, -1).astype(float)
+            y_val_svm = np.where(y[val_idx] == 1, 1, -1).astype(float)
+
+            res = adagrad_svm(
+                X[tr_idx], y_tr_svm, X[val_idx], y_val_svm,
+                kernel_name=kernel_name,
+                kernel_params=kp,
+                random_state=random_state,
+                **params,
+            )
+            fold_scores.append(res["test_acc_history"][-1])
+
+        s = np.array(fold_scores)
+        rows.append({
+            **params,
+            "kernel": kernel_name,
+            "mean_cv": s.mean(),
+            "std_cv": s.std(),
+        })
+
+    results_df = (
+        pd.DataFrame(rows)
+        .sort_values("mean_cv", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    best = results_df.iloc[0]
+    return {
+        "results_df": results_df,
+        "best_params": {
+            "lambda_reg": float(best["lambda_reg"]),
+            "eta0": float(best["eta0"]),
+            "eps": float(best["eps"]),
+            "n_epochs": int(best["n_epochs"]),
+        },
+        "best_cv_score": float(best["mean_cv"]),
+        "fit_time_s": time.perf_counter() - t0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# JOINT kernel + AdaGrad hyperparameter tuning
+# ---------------------------------------------------------------------------
+
+_DEFAULT_ADAGRAD_GRID_COMPACT = [
+    {"lambda_reg": lr, "eta0": e, "eps": eps, "n_epochs": ne}
+    for lr in [0.001, 0.01, 0.1]
+    for e in [0.01, 0.05, 0.1]
+    for eps in [1e-8, 1e-6]
+    for ne in [50, 100]
+]
+
+
+def tune_adagrad_joint_cv(
+        X_train, y_train,
+        kernel_names=None,
+        adagrad_param_grid=None,
+        cv=CV_FOLDS,
+        random_state=42,
+        verbose=True,
+):
+    """
+    Joint grid search over kernels (including kernel hyperparameters)
+    AND AdaGrad optimizer settings.
+
+    This mirrors tune_rm_joint_cv, but swaps the RM update rule
+    for AdaGrad's coordinate-wise adaptive updates.
+
+    Returns
+    -------
+    dict with:
+        results_df, best_result, fit_time_s
+    """
+    kernel_names = kernel_names or list(KERNEL_REGISTRY.keys())
+    adagrad_param_grid = adagrad_param_grid or _DEFAULT_ADAGRAD_GRID_COMPACT
+
+    X = np.asarray(X_train, dtype=float)
+    y = np.asarray(y_train)
+
+    rows = []
+    best = None
+    t0 = time.perf_counter()
+
+    for kernel_name in kernel_names:
+        entry = KERNEL_REGISTRY[kernel_name]
+        kernel_param_list = entry["param_grid"]
+
+        for kp in kernel_param_list:
+            for ada_params in adagrad_param_grid:
+                fold_scores = []
+
+                for tr_idx, val_idx in cv.split(X, y):
+                    y_tr_svm = np.where(y[tr_idx] == 1, 1, -1).astype(float)
+                    y_val_svm = np.where(y[val_idx] == 1, 1, -1).astype(float)
+
+                    res = adagrad_svm(
+                        X[tr_idx], y_tr_svm, X[val_idx], y_val_svm,
+                        kernel_name=kernel_name,
+                        kernel_params=kp,
+                        random_state=random_state,
+                        **ada_params,
+                    )
+                    fold_scores.append(res["test_acc_history"][-1])
+
+                s = np.array(fold_scores)
+
+                row = {
+                    "kernel": kernel_name,
+                    "kernel_params": kp,
+                    **ada_params,
+                    "mean_cv": s.mean(),
+                    "std_cv": s.std(),
+                }
+                rows.append(row)
+
+                if best is None or s.mean() > best["mean_cv"]:
+                    best = row.copy()
+
+        if verbose:
+            elapsed = time.perf_counter() - t0
+            print(
+                f"  {kernel_name:8s}  combos tested: {len(rows):>4d}  "
+                f"best_cv so far: {best['mean_cv']:.4f}  [{elapsed:.0f}s]"
+            )
+
+    results_df = (
+        pd.DataFrame(rows)
+        .sort_values(["mean_cv"], ascending=False)
+        .reset_index(drop=True)
+    )
+
+    return {
+        "results_df": results_df,
+        "best_result": best,
+        "fit_time_s": time.perf_counter() - t0,
+    }
+
+
+def fit_best_adagrad(
+        X_train, y_train_svm, X_test, y_test_svm, best_result,
+        n_epochs_override=None,
+):
+    """
+    Refit AdaGrad SVM on the full training set using the best settings
+    found by tune_adagrad_joint_cv.
+    """
+    ada_keys = {"lambda_reg", "eta0", "eps", "n_epochs"}
+    ada_params = {k: best_result[k] for k in ada_keys if k in best_result}
+
+    ada_params["lambda_reg"] = float(ada_params["lambda_reg"])
+    ada_params["eta0"] = float(ada_params["eta0"])
+    ada_params["eps"] = float(ada_params["eps"])
+    ada_params["n_epochs"] = int(ada_params["n_epochs"])
+
+    if n_epochs_override is not None:
+        ada_params["n_epochs"] = int(n_epochs_override)
+
+    return adagrad_svm(
+        X_train, y_train_svm, X_test, y_test_svm,
+        kernel_name=best_result["kernel"],
+        kernel_params=best_result["kernel_params"],
+        **ada_params,
+    )
+
+
+def run_adagrad_experiments(filepath="../data/ridings.csv", n_epochs_override=None, verbose=True):
+    """
+    End-to-end entry point for AdaGrad experiments.
+    Mirrors the style of run_optimizer_experiments / RM tuning pipeline.
+    """
+    data = prepare_train_test_data(filepath=filepath)
+
+    search = tune_adagrad_joint_cv(
+        X_train=data["X_train_proc"],
+        y_train=data["y_train"],
+        verbose=verbose,
+    )
+
+    fit = fit_best_adagrad(
+        X_train=data["X_train_proc"],
+        y_train_svm=data["y_train_svm"],
+        X_test=data["X_test_proc"],
+        y_test_svm=data["y_test_svm"],
+        best_result=search["best_result"],
+        n_epochs_override=n_epochs_override,
+    )
+
+    y_pred = predict_rm(fit, data["X_test_proc"])
+    test_acc = accuracy_score(data["y_test"], y_pred)
+
+    return {
+        "data": data,
+        "search": search,
+        "fit": fit,
+        "y_pred": y_pred,
+        "test_acc": test_acc,
+    }
 
 # ---------------------------------------------------------------------------
 # MLP optimizer comparison
