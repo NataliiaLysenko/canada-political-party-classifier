@@ -1,16 +1,14 @@
 """
-kernels.py — kernel functions, kernelized SVM (TODO), and cross-validation framework (TODO).
+kernels.py — kernel functions, kernelized SVM, and cross-validation framework.
 
-Import what you need in any notebook: e.g., from kernels import compute_kernel_matrix, KernelSVM, grid_search_cv, final_evaluate
+Import what you need in any notebook: e.g., from kernels import compute_kernel_matrix...
 """
 
 
 import numpy as np
 import pandas as pd
-
-from sklearn.model_selection import ParameterGrid
 from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score
 
 from cv_tuning import prepare_train_test_data, CV_FOLDS
 
@@ -79,7 +77,6 @@ KERNEL_REGISTRY = {
 
 # Compute the Gram matrix for the selected kernel.
 # Uses the kernel registry to fetch default parameters and the kernel function.
-
 def compute_kernel_matrix(X1, X2, kernel_name, **kernel_params):
     """Return Gram matrix using the selected kernel."""
     entry = KERNEL_REGISTRY[kernel_name]
@@ -88,8 +85,6 @@ def compute_kernel_matrix(X1, X2, kernel_name, **kernel_params):
 
 
 # Build an sklearn SVC that matches the selected kernel setting.
-# This keeps model fitting stable while we control the kernel search manually.
-
 def _build_svc(kernel_name, C=1.0, **kernel_params):
     """Build an sklearn SVC matching a registry kernel configuration."""
     p = {**KERNEL_REGISTRY[kernel_name]["defaults"], **kernel_params}
@@ -147,10 +142,3 @@ def search_kernels(X_train, y_train, X_test, y_test, c_values=(0.1, 1, 10), cv=C
     )
     return {"results_df": results_df, "best_result": best}
 
-
-def print_kernel_eval_report(y_true, y_pred, model_name="Kernel SVM"):
-    print(f"=== {model_name} ===")
-    print(f"Test Accuracy: {accuracy_score(y_true, y_pred):.3f}\n")
-    print(classification_report(y_true, y_pred))
-    print("Confusion Matrix:")
-    print(confusion_matrix(y_true, y_pred))
