@@ -20,7 +20,7 @@ MLP comparison:
     tune_mlp_optimizers, run_optimizer_experiments
 
 Reporting:
-    print_rm_eval_report, build_optimizer_results_summary
+    print_eval_report, build_optimizer_results_summary
 """
 import time
 import numpy as np
@@ -572,12 +572,44 @@ def repeated_eval_comparison(
 # Reporting
 # ---------------------------------------------------------------------------
 
-def print_rm_eval_report(y_true, y_pred, model_name="RM SVM"):
+def print_eval_report(y_true, y_pred, model_name="SVM"):
+    """
+    Print a full evaluation report including:
+      - accuracy, classification report, confusion matrix
+      - per-class and overall descriptive statistics:
+        mean, std, median, Q1, Q3 of per-sample correctness
+    """
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    correct = (y_true == y_pred).astype(float)
+
     print(f"=== {model_name} ===")
-    print(f"Test Accuracy: {accuracy_score(y_true, y_pred):.3f}\n")
+    print(f"Test Accuracy : {accuracy_score(y_true, y_pred):.4f}\n")
+    print(f"  Std    : {correct.std():.4f}")
+
+    print("--- Classification Report ---")
     print(classification_report(y_true, y_pred, zero_division=0))
-    print("Confusion Matrix:")
+
+    print("--- Confusion Matrix ---")
     print(confusion_matrix(y_true, y_pred))
+    print()
+
+
+# Keep old name as an alias
+print_rm_eval_report = print_eval_report
+
+
+def best_per_kernel(results_df):
+    """
+    Return the best mean_cv / std_cv row per kernel from a
+    tune_optimizer_joint_cv results_df, sorted by mean_cv descending.
+    """
+    idx = results_df.groupby("kernel")["mean_cv"].idxmax()
+    return (
+        results_df.loc[idx, ["kernel", "mean_cv", "std_cv"]]
+        .sort_values("mean_cv", ascending=False)
+        .reset_index(drop=True)
+    )
 
 
 def build_optimizer_results_summary(result):
