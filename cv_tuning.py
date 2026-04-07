@@ -18,6 +18,7 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 from helpers import (
     load_data, clean_target, drop_unused_columns,
     prepare_X_y, build_preprocessor,
+    prepare_X_y_region, build_preprocessor_region, PROVINCE_TO_REGION,
 )
 
 CV_FOLDS = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
@@ -74,6 +75,63 @@ def prepare_train_test_data(filepath="../data/ridings.csv", test_size=0.2,
         "y_test_svm": y_test_svm,
         "preprocessor": preprocessor,
     }
+
+def prepare_train_test_data_region(filepath="../data/ridings.csv", test_size=0.2,
+                                   random_state=42):
+    """
+    Variant of prepare_train_test_data that replaces 'Province / Territory'
+    with a coarser 'region' column before preprocessing.
+
+    Region mapping (6 groups):
+        Atlantic         — NL, PE, NS, NB
+        Quebec           — QC
+        Ontario          — ON
+        Prairies         — MB, SK, AB
+        British Columbia — BC
+        Territories      — YT, NT, NU
+
+    Returns the same dict shape as prepare_train_test_data, with an extra key:
+        preprocessor_region  : the region-based ColumnTransformer
+    """
+    df = load_data(filepath)
+    df = clean_target(df)
+    df = drop_unused_columns(df)
+    df = df.copy()
+    df["region"] = df["Province / Territory"].map(PROVINCE_TO_REGION)
+
+    X, y = prepare_X_y_region(df)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=y,
+    )
+
+    preprocessor = build_preprocessor_region()
+    X_train_proc = preprocessor.fit_transform(X_train)
+    X_test_proc  = preprocessor.transform(X_test)
+
+    if hasattr(X_train_proc, "toarray"):
+        X_train_proc = X_train_proc.toarray()
+    if hasattr(X_test_proc, "toarray"):
+        X_test_proc = X_test_proc.toarray()
+
+    y_train_svm = np.where(y_train.values == 1,  1, -1)
+    y_test_svm  = np.where(y_test.values  == 1,  1, -1)
+
+    return {
+        "X_train": X_train,
+        "X_test":  X_test,
+        "y_train": y_train,
+        "y_test":  y_test,
+        "X_train_proc": X_train_proc,
+        "X_test_proc":  X_test_proc,
+        "y_train_svm":  y_train_svm,
+        "y_test_svm":   y_test_svm,
+        "preprocessor": preprocessor,
+    }
+
 
 def run_baseline_lr(X_train, y_train, X_test, y_test, cv=CV_FOLDS):
     """
