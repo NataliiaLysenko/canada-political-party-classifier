@@ -20,7 +20,7 @@ from helpers import (
     prepare_X_y, build_preprocessor,
 )
 
-CV_FOLDS = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+CV_FOLDS = StratifiedKFold(n_splits=10, shuffle=True, random_state=42)
 
 def prepare_train_test_data(filepath="../data/ridings.csv", test_size=0.2,
                             random_state=42):

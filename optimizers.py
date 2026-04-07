@@ -490,7 +490,83 @@ def run_optimizer_experiments(filepath="../data/ridings.csv"):
         "result": result,
         "summary_df": build_optimizer_results_summary(result),
     }
+# ---------------------------------------------------------------------------
+# Repeated split evaluation
+# ---------------------------------------------------------------------------
 
+def repeated_eval_comparison(
+        experiments,
+        filepath="../data/ridings.csv",
+        n_repetitions=10,
+        seeds=None,
+):
+    """
+    Evaluate pre-tuned SVM configurations across repeated stratified train/test
+    splits to get robust accuracy estimates.
+
+    Hyperparameters are fixed (from a prior CV search); only the train/test
+    split randomness changes across repetitions.
+
+    Parameters
+    ----------
+    experiments : list of dicts, each with keys:
+        "name"              — str label for the optimizer
+        "optimizer_fn"      — callable (robbins_monro_svm | adagrad_svm | adam_svm)
+        "best_result"       — dict from tune_optimizer_joint_cv
+        "n_epochs_override" — int or None
+    filepath : str
+    n_repetitions : int
+        Number of repeated splits (default 10).
+    seeds : list[int] or None
+        Explicit random seeds. If None, uses ``range(n_repetitions)``.
+
+    Returns
+    -------
+    summary_df : pd.DataFrame
+        One row per optimizer — Mean Accuracy, Std, Min, Max.
+    raw_df : pd.DataFrame
+        One row per (optimizer × seed) — Optimizer, Seed, Accuracy.
+    """
+    seeds = list(seeds) if seeds is not None else list(range(n_repetitions))
+
+    raw_rows = []
+    for seed in seeds:
+        data = prepare_train_test_data(filepath=filepath, random_state=seed)
+        for exp in experiments:
+            fit = fit_best(
+                exp["optimizer_fn"],
+                data["X_train_proc"], data["y_train_svm"],
+                data["X_test_proc"],  data["y_test_svm"],
+                best_result=exp["best_result"],
+                n_epochs_override=exp.get("n_epochs_override"),
+            )
+            y_pred = predict_rm(fit, data["X_test_proc"])
+            acc = accuracy_score(data["y_test"], y_pred)
+            raw_rows.append({"Optimizer": exp["name"], "Seed": seed, "Accuracy": acc})
+
+    raw_df = pd.DataFrame(raw_rows)
+
+    summary_df = (
+        raw_df.groupby("Optimizer")["Accuracy"]
+        .agg(
+            Mean="mean",
+            Std="std",
+            Min="min",
+            Max="max",
+        )
+        .rename(columns={"Mean": "Mean Accuracy", "Std": "Std Accuracy"})
+        .reset_index()
+        .sort_values("Mean Accuracy", ascending=False)
+        .reset_index(drop=True)
+    )
+    summary_df.index = summary_df.index + 1
+    summary_df.index.name = "#"
+    summary_df["Mean Accuracy"] = summary_df["Mean Accuracy"].map("{:.4f}".format)
+    summary_df["Std Accuracy"]  = summary_df["Std Accuracy"].map("±{:.4f}".format)
+    summary_df["Min"]           = summary_df["Min"].map("{:.4f}".format)
+    summary_df["Max"]           = summary_df["Max"].map("{:.4f}".format)
+
+    return summary_df, raw_df
 
 # ---------------------------------------------------------------------------
 # Reporting
