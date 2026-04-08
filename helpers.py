@@ -45,6 +45,23 @@ def drop_unused_columns(df):
     return df.drop(columns=drop_cols, errors="ignore")
 
 
+PROVINCE_TO_REGION = {
+    "Newfoundland and Labrador": "Atlantic",
+    "Prince Edward Island":      "Atlantic",
+    "Nova Scotia":               "Atlantic",
+    "New Brunswick":             "Atlantic",
+    "Quebec":                    "Quebec",
+    "Ontario":                   "Ontario",
+    "Manitoba":                  "Prairies",
+    "Saskatchewan":              "Prairies",
+    "Alberta":                   "Prairies",
+    "British Columbia":          "British Columbia",
+    "Yukon":                     "Territories",
+    "Northwest Territories":     "Territories",
+    "Nunavut":                   "Territories",
+}
+
+
 def get_feature_lists():
     """
     Return numeric and categorical feature lists.
@@ -67,6 +84,29 @@ def get_feature_lists():
     return numeric_features, categorical_features
 
 
+def get_feature_lists_region():
+    """
+    Return numeric and categorical feature lists for the region-based model.
+    Uses 'region' instead of 'Province / Territory'.
+    """
+    numeric_features = [
+        "Ave_Age_All",
+        "bike_rate",
+        "pop",
+        "NoPostsecondary_all",
+        "french",
+        "HouseNeed",
+        "income_all",
+        "unemploy_all"
+    ]
+
+    categorical_features = [
+        "region"
+    ]
+
+    return numeric_features, categorical_features
+
+
 def prepare_X_y(df):
     """
     Prepare X and y for modeling.
@@ -77,11 +117,49 @@ def prepare_X_y(df):
     return X, y
 
 
+def prepare_X_y_region(df):
+    """
+    Prepare X and y for the region-based model.
+    Expects df to already contain the 'region' column.
+    """
+    numeric_features, categorical_features = get_feature_lists_region()
+    X = df[numeric_features + categorical_features]
+    y = df["target"]
+    return X, y
+
+
 def build_preprocessor():
     """
     Build preprocessing pipeline for numeric and categorical features.
     """
     numeric_features, categorical_features = get_feature_lists()
+
+    numeric_transformer = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler())
+    ])
+
+    categorical_transformer = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore"))
+    ])
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features)
+        ]
+    )
+
+    return preprocessor
+
+
+def build_preprocessor_region():
+    """
+    Build preprocessing pipeline identical to build_preprocessor() but using
+    'region' as the categorical feature instead of 'Province / Territory'.
+    """
+    numeric_features, categorical_features = get_feature_lists_region()
 
     numeric_transformer = Pipeline(steps=[
         ("imputer", SimpleImputer(strategy="median")),
