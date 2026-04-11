@@ -21,7 +21,7 @@ All experiment results are stored in the notebook output cells under `notebooks/
 |---|---|
 | **`optimizers.py`** | **Main module**. Implements `robbins_monro_svm`, `adagrad_svm`, and `adam_svm` — all working on a kernelized soft-margin SVM in dual form. Also provides `tune_optimizer_joint_cv` for joint hyperparameter + kernel grid search with 10-fold stratified CV, and `repeated_eval_comparison` for multi-seed evaluation. |
 | **`kernels.py`** | Defines four kernel functions (linear, RBF, polynomial, sigmoid) with a registry of default parameters and CV search grids.  |
-| **`cv_tuning.py`** | Data preparation (load → clean → split → scale/encode → convert to SVM labels). Also contains sklearn baseline functions (`run_baseline_lr`, `tune_lr`, `tune_sklearn_svm`). |
+| **`cv_tuning.py`** | Data preparation (load → clean → split → scale/encode → convert to SVM labels). Also defines the CV configuration. |
 | **`helpers.py`** | Low-level methods shared across all .py files: data loading, target binarization, column dropping, feature lists, province-to-region mapping, and preprocessing (StandardScaler + OneHotEncoder). |
 | **`preprocessing.py`** | Early script for data exploration — **not used in the final model**. Kept for reference. |
 
